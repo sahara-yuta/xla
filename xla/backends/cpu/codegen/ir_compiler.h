@@ -64,6 +64,7 @@ class IrCompiler : public llvm::orc::IRCompileLayer::IRCompiler {
   struct Options {
     llvm::CodeGenOptLevel opt_level = llvm::CodeGenOptLevel::None;
     bool optimize_for_size = false;
+        bool emit_asm = false;
 
     TargetMachineOptions target_machine_options;
 
@@ -85,6 +86,8 @@ class IrCompiler : public llvm::orc::IRCompileLayer::IRCompiler {
     std::function<void(const llvm::Module&)> post_optimization;
     std::function<void(const llvm::Module&, const llvm::object::ObjectFile&)>
         post_codegen;
+    std::function<void(const llvm::Module&, const std::string&)>
+        post_codegen_asm;
   };
 
   static std::unique_ptr<IrCompiler> Create(llvm::TargetOptions target_options,
@@ -117,6 +120,10 @@ class IrCompiler : public llvm::orc::IRCompileLayer::IRCompiler {
 
   // Emits machine code for the given module.
   std::unique_ptr<llvm::MemoryBuffer> EmitMachineCode(
+      llvm::Module& module, llvm::TargetMachine* target_machine) const;
+
+  // Emits assembly for the given module. Returns nullopt on failure.
+  std::optional<std::string> EmitAssembly(
       llvm::Module& module, llvm::TargetMachine* target_machine) const;
 
   static llvm::CodeGenOptLevel GetCodeGenOptLevel(

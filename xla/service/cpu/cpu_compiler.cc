@@ -1243,9 +1243,27 @@ static void DumpModuleToFile(const llvm::Module& llvm_module,
     parts.push_back("o");
     return absl::StrJoin(parts, ".");
   };
-  DumpToFileInDir(
+    DumpToFileInDir(
       hlo_module, /*file_prefix=*/"", get_file_suffix(),
       absl::string_view(obj_file.getData().data(), obj_file.getData().size()));
+}
+
+static void DumpAssemblyToFile(const llvm::Module& llvm_module,
+                               absl::string_view asm_text,
+                               const HloModule& hlo_module) {
+  absl::string_view id = llvm_module.getModuleIdentifier();
+  size_t pos = std::min(id.size(), 1 + kXlaModuleIdentifier.size());
+  auto get_file_suffix = [&]() {
+    std::vector<absl::string_view> parts = {"asm"};
+    parts.reserve(3);
+    absl::string_view middle_name = id.substr(pos);
+    if (!middle_name.empty()) {
+      parts.push_back(middle_name);
+    }
+    parts.push_back("s");
+    return absl::StrJoin(parts, ".");
+  };
+  DumpToFileInDir(hlo_module, /*file_prefix=*/"", get_file_suffix(), asm_text);
 }
 
 // Post-compilation callback functor for use by SimpleOrcJIT.
@@ -1265,6 +1283,15 @@ CreateOrcJITPostCompilationHook(const HloModule* hlo_module,
 
     if (DumpingEnabledForHloModule(*hlo_module)) {
       DumpModuleToFile(llvm_module, obj_file, *hlo_module);
+    }
+  };
+}
+
+static std::function<void(const llvm::Module&, const std::string&)>
+CreateOrcJITPostCompilationAsmHook(const HloModule* hlo_module) {
+  return [=](const llvm::Module& llvm_module, const std::string& asm_text) {
+    if (DumpingEnabledForHloModule(*hlo_module)) {
+      DumpAssemblyToFile(llvm_module, asm_text, *hlo_module);
     }
   };
 }
@@ -1675,6 +1702,7 @@ CpuCompiler::CompileCpuExecutable(
       pre_optimization_ir_hook,
       post_optimization_ir_hook,
       CreateOrcJITPostCompilationHook(module.get(), &obj_files),
+      CreateOrcJITPostCompilationAsmHook(module.get()),
   };
 
   ir_compiler->register_compilation_hooks(std::move(ir_compiler_hooks));
@@ -2058,6 +2086,7 @@ absl::StatusOr<std::unique_ptr<Executable>> CpuCompiler::RunBackend(
   IrCompiler::Options ir_compiler_options{
       /*optimization_level=*/IrCompiler::GetCodeGenOptLevel(module->config()),
       /*optimize_for_size=*/options::OptimizeForSizeRequested(module->config()),
+      /*emit_asm=*/DumpingEnabledForHloModule(*module),
       /*target_machine_options=*/
       target_machine_options,
       /*fast_math_flags=*/llvm_ir::GetCpuFastMathFlags(module->config()),
@@ -2201,6 +2230,7 @@ CpuCompiler::CompileAheadOfTimeThunks(
       /*optimization_level=*/target_machine->getOptLevel(),
       /*optimize_for_size=*/
       options::OptimizeForSizeRequested(module->config()),
+      /*emit_asm=*/DumpingEnabledForHloModule(*module),
       /*target_machine_options=*/target_machine_options,
       /*fast_math_flags=*/llvm_ir::GetCpuFastMathFlags(module->config()),
       /*disable_expensive_passes=*/
