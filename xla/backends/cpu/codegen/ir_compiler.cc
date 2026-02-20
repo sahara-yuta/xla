@@ -298,6 +298,19 @@ llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>> IrCompiler::operator()(
   std::unique_ptr<llvm::MemoryBuffer> mc_memory_buffer =
       EmitMachineCode(module, target_machine->get());
 
+  if (options_.emit_asm) {
+    std::optional<std::string> asm_text =
+        EmitAssembly(module, target_machine->get());
+    if (!asm_text.has_value()) {
+      LOG(WARNING) << "Failed to emit assembly";
+    } else {
+      absl::MutexLock lock(mutex_);
+      if (hooks_.post_codegen_asm) {
+        hooks_.post_codegen_asm(module, *asm_text);
+      }
+    }
+  }
+
   {  // Synchronize access to user-defined hooks.
     absl::MutexLock lock(mutex_);
     if (hooks_.post_codegen) {
@@ -456,6 +469,28 @@ std::unique_ptr<llvm::MemoryBuffer> IrCompiler::EmitMachineCode(
 
   return std::make_unique<llvm::SmallVectorMemoryBuffer>(
       std::move(mc_stream_buffer), mem_region_name_str);
+}
+
+std::optional<std::string> IrCompiler::EmitAssembly(
+    llvm::Module& module, llvm::TargetMachine* target_machine) const {
+  llvm::SmallVector<char, 0> asm_stream_buffer;
+  llvm::raw_svector_ostream ostream(asm_stream_buffer);
+
+  llvm::legacy::PassManager asm_passes;
+  asm_passes.add(new llvm::RuntimeLibraryInfoWrapper(
+      module.getTargetTriple(), target_machine->Options.ExceptionModel,
+      target_machine->Options.FloatABIType, target_machine->Options.EABIVersion,
+      target_machine->Options.MCOptions.ABIName,
+      target_machine->Options.VecLib));
+
+  if (target_machine->addPassesToEmitFile(
+          asm_passes, ostream, nullptr,
+          llvm::CodeGenFileType::CGFT_AssemblyFile)) {
+    return std::nullopt;
+  }
+
+  asm_passes.run(module);
+  return std::string(asm_stream_buffer.begin(), asm_stream_buffer.end());
 }
 
 llvm::CodeGenOptLevel IrCompiler::GetCodeGenOptLevel(
